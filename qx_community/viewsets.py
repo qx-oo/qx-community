@@ -1,4 +1,5 @@
-from rest_framework import viewsets, decorators
+from django.db.models import Prefetch
+from rest_framework import viewsets
 from rest_framework.permissions import (
     IsAuthenticated, BasePermission, AllowAny
 )
@@ -7,6 +8,7 @@ from qx_base.qx_rest import mixins
 from .serializers import (
     Comment,
     CommentSerializer,
+    CreateCommentSerializer,
     Star,
     StarSerializer,
 )
@@ -39,6 +41,11 @@ class StarViewSet(viewsets.GenericViewSet,
         if self.request.user.is_authenticated:
             queryset = queryset.filter(user=self.request.user)
         return queryset
+
+
+comment_related_user = Comment.objects.select_related(
+    'user', 'user__userinfo', 'to_user', 'to_user__userinfo'
+).filter(is_active=True)
 
 
 class CommentFilter(filters.FilterSet):
@@ -86,9 +93,14 @@ class CommentViewSet(viewsets.GenericViewSet,
     permission_classes = (
         CommentPermission,
     )
-    queryset = Comment.objects.all()
+    # queryset = Comment.objects.all()
+    queryset = comment_related_user.prefetch_related(
+        Prefetch('comment_set', queryset=comment_related_user)).all()
 
-    serializer_class = CommentSerializer
+    def get_serializer_class(self):
+        if self.action == 'create':
+            return CreateCommentSerializer
+        return CommentSerializer
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -96,3 +108,13 @@ class CommentViewSet(viewsets.GenericViewSet,
             queryset = queryset.select_related(
                 'user__userinfo', 'to_user__userinfo')
         return queryset
+
+    def _list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+
+        page = self.paginate_queryset(queryset)
+
+        page = Comment.load_user(page)
+
+        serializer = self.get_serializer(page, many=True)
+        return self.paginator.get_paginated_data(serializer.data)
